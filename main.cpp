@@ -15,6 +15,7 @@
 #include <kvs/ImageObject>
 #include <kvs/ImageRenderer>
 #include <kvs/Endian>
+#include <kvs/ColorImage>
 #include <iostream>
 #include <fstream>
 #include <iterator>
@@ -29,36 +30,40 @@ static const int SIZE = NX*NY*NZ;
 
 kvs::ValueArray<float> createCoords(int nx, int ny, int nz);
 
-static const kvs::ValueArray<float> coords = createCoords(NX, NY, NZ);
+//static const kvs::ValueArray<float> coords = createCoords(NX, NY, NZ);
 
 enum Parameter {
-  U,
-  V,
-  W,
-  T,
-  P,
-  QV,
-  QC,
-  QR,
-  QCI,
-  QS,
-  QG
+  U,   // 東西風 : X-wind component (m s-1)
+  V,   // 南北風 : Y-wind component (m s-1)
+  W,   // 鉛直風 : Z-wind component (m s-1)
+  T,   // 気温   : Temperature (K)
+  P,   // 気圧   : Pressure (Pa)
+  QV,  // 水蒸気混合比 : Water vapor mixing ratio (kg kg-1) 
+  QC,  // 雲水混合比   : Cloud water mixing ratio (kg kg-1)
+  QR,  // 雨混合比     : Rain mixing ratio (kg kg-1)
+  QCI, // 雲氷混合比   : Cloud ice mixing ratio (kg kg-1)
+  QS,  // 雪混合比     : Snow mixing ratio (kg kg-1)
+  QG   // あられ混合比 : Graupel mixing ratio (kg kg-1)
 };
 
 kvs::ValueArray<float> createCoords(int nx, int ny, int nz) {
   // x方向は1.09545294622*10^-3°間隔
   std::vector<float> x(nx);
-  double radius_earth = 6360000.0; // [m]
+  float radius_earth = 6360000.0; // [m]
   // 基準地点=(東経133.590905 , 北緯33.51538902)
-  double radius_point = radius_earth * cos(33.5153/360.0);
-  double circumference_point = radius_point * 2.0 * 3.141592;
+  float latitude = 33.5153;
+  float longitude_interval = 0.00109545294622;
+  float radius_point = radius_earth * cos(latitude/360.0);
+  float circumference_point = radius_point * 2.0 * 3.141592;
+
   for (int i = 0; i < nx; ++i) {
-    x[i] = (i-nx/2.) * circumference_point * 0.00109545294622 / 360.0;
+    x[i] = (i-nx/2.) * circumference_point * longitude_interval / 360.0;
   }
   // y方向は8.99279260651*10^-4°間隔
+  float latitude_interval = 0.000899279260;
   std::vector<float> y(ny);
   for (int i = 0; i < ny; ++i) {
-    y[i] = (i-ny/2.) * radius_earth * 2.0 * 3.141592 * 0.000899279260 / 360.0;
+    y[i] = (i-ny/2.) * radius_earth * 2.0 * 3.141592 * latitude_interval / 360.0;
   }
 
   // z方向 : (単位はメートル[m])
@@ -121,9 +126,9 @@ kvs::StructuredVolumeObject *load(std::ifstream &ifs) {
   vol->setValues(kvs_value);
   vol->updateMinMaxValues();
 
-  vol->setGridTypeToRectilinear();
-  vol->setCoords(coords.clone());
-  vol->updateMinMaxCoords();
+  //vol->setGridTypeToRectilinear();
+  //vol->setCoords(coords.clone());
+  //vol->updateMinMaxCoords();
   return vol;
 }
 
@@ -179,11 +184,18 @@ int main( int argc, char** argv )
     screen.setGeometry( 0, 0, 512, 512 );
     screen.setTitle( "kvs::OrthoSlice" );
 
-    kvs::ScreenCaptureEvent capture_event;
-    //capture_event.setFilename("file1");
-    screen.addEvent(&capture_event);
-    screen.show();
+    screen.create();
+    screen.paintEvent();
+    screen.paintEvent();
+    kvs::ColorImage image = screen.scene()->camera()->snapshot();
+    image.write("image.bmp");
 
-    return( app.run() );
+    //kvs::ScreenCaptureEvent capture_event;
+    ////capture_event.setFilename("file1");
+    //screen.addEvent(&capture_event);
+    //screen.show();
+
+    //return( app.run() );
+    app.quit();
     delete volume;
 }
