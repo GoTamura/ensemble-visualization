@@ -14,6 +14,7 @@
 #include <kvs/Stat>
 #include <kvs/ImageObject>
 #include <kvs/ImageRenderer>
+#include <kvs/Endian>
 #include <iostream>
 #include <fstream>
 #include <iterator>
@@ -27,6 +28,7 @@ static const int NZ = 50;
 static const int SIZE = NX*NY*NZ;
 
 kvs::ValueArray<float> createCoords(int nx, int ny, int nz);
+
 static const kvs::ValueArray<float> coords = createCoords(NX, NY, NZ);
 
 enum Parameter {
@@ -42,16 +44,6 @@ enum Parameter {
   QS,
   QG
 };
-
-uint32_t swap_byte_ordering(uint32_t input)
-{
-  uint32_t output;
-  output  = input              << 24;
-  output |= (input&0x0000FF00) <<  8;
-  output |= (input&0x00FF0000) >>  8;
-  output |= input              >> 24;
-  return output;
-}
 
 kvs::ValueArray<float> createCoords(int nx, int ny, int nz) {
   // x方向は1.09545294622*10^-3°間隔
@@ -116,9 +108,10 @@ kvs::StructuredVolumeObject *load(std::ifstream &ifs) {
   ifs.read((char*)kvs_value.data(), SIZE*4);
   
   // convert endian
-  for (auto&& i: kvs_value) {
-    uint32_t u = swap_byte_ordering(reinterpret_cast<uint32_t&>(i));
-    i = reinterpret_cast<float&>(u);
+  if (kvs::Endian::IsLittle()) {
+    for (auto&& i: kvs_value) {
+      kvs::Endian::Swap(&i);
+    }
   }
   
   kvs::StructuredVolumeObject *vol = new kvs::StructuredVolumeObject();
@@ -154,21 +147,22 @@ int main( int argc, char** argv )
 
     kvs::StructuredVolumeObject* volume = loadData("ensemble_data/gs0030.bin", Parameter::QV);
 
+    kvs::StructuredVolumeObject* volume2 = loadData("ensemble_data/gs0030.bin", Parameter::QV);
+    std::cout << kvs::Stat::Corr(volume->values().asValueArray<float>(), volume2->values().asValueArray<float>()) << std::endl;
+
+
     if ( !volume )
     {
         kvsMessageError( "Cannot create a structured volume object." );
         return( false );
     }
 
-    /* Extract orthogonal planes by using OrthoSlice class.
-     *    p: plane position.
-     *    a: axis of the orthogonal plane.
-     *    t: transfer function.
-     */
-    //const float p = volume->resolution().z() * 0.5f;
+    // 指定されたz軸断面の位置
+    const float p = 15;
+
     const kvs::OrthoSlice::AlignedAxis a = kvs::OrthoSlice::ZAxis;
     const kvs::TransferFunction t( 256 );
-    kvs::PolygonObject* object = new kvs::OrthoSlice( volume, 15, a, t );
+    kvs::PolygonObject* object = new kvs::OrthoSlice( volume, p, a, t );
     if ( !object )
     {
         kvsMessageError( "Cannot create a polygon object." );
@@ -182,7 +176,6 @@ int main( int argc, char** argv )
     kvs::glut::Screen screen( &app );
     screen.registerObject( object );
     //screen.registerObject( volume, ren );
-    //screen.registerObject(&image, renderer);
     screen.setGeometry( 0, 0, 512, 512 );
     screen.setTitle( "kvs::OrthoSlice" );
 
@@ -191,6 +184,6 @@ int main( int argc, char** argv )
     screen.addEvent(&capture_event);
     screen.show();
 
-    delete volume;
     return( app.run() );
+    delete volume;
 }
