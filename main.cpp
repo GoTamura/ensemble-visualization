@@ -108,22 +108,27 @@ kvs::ValueArray<float> createCoords(int nx, int ny, int nz) {
   return kvs::ValueArray<float>(x);
 }
 
-kvs::StructuredVolumeObject *load(std::ifstream &ifs) {
-  kvs::ValueArray<float> kvs_value(SIZE);
-  ifs.read((char*)kvs_value.data(), SIZE*4);
+kvs::ValueArray<float> loadValueArray(std::ifstream &ifs, int size) {
+  kvs::ValueArray<float> array(size);
+  ifs.read((char*)array.data(), size*4);
   
   // convert endian
   if (kvs::Endian::IsLittle()) {
-    for (auto&& i: kvs_value) {
+    for (auto&& i: array) {
       kvs::Endian::Swap(&i);
     }
   }
+  return array;
+}
+
+kvs::StructuredVolumeObject *load(std::ifstream &ifs, kvs::ValueArray<float> array) {
+  kvs::ValueArray<float> kvs_value = loadValueArray(ifs, SIZE);
   
   kvs::StructuredVolumeObject *vol = new kvs::StructuredVolumeObject();
   vol->setGridTypeToUniform();
   vol->setVeclen(1);
   vol->setResolution(kvs::Vector3ui(NX, NY, NZ));
-  vol->setValues(kvs_value);
+  vol->setValues(array);
   vol->updateMinMaxValues();
 
   //vol->setGridTypeToRectilinear();
@@ -140,11 +145,119 @@ kvs::StructuredVolumeObject *loadData(std::string filename, Parameter p) {
   }
 
   ifs.seekg(SIZE*4*p, std::ios_base::beg);
-  kvs::StructuredVolumeObject* vol = load(ifs);
+  kvs::StructuredVolumeObject* vol = load(ifs, loadValueArray(ifs, SIZE));
    
   ifs.close();
   return vol;
 }
+
+// https://qiita.com/Ushio/items/f5630d87f55c7afa984e
+class Kahan {
+public:
+    Kahan() {}
+    Kahan(double value) {}
+
+    void add(double x) {
+        double y = x - _c;
+        double t = _sum + y;
+        _c = (t - _sum) - y;
+        _sum = t;
+    }
+    void operator=(double x) {
+        _sum = x;
+        _c = 0.0;
+    }
+    void operator+=(double x) {
+        add(x);
+    }
+    operator double() const {
+        return _sum;
+    }
+private:
+    double _sum = 0.0;
+    double _c = 0.0;
+};
+
+class OnlineVariance {
+public:
+    void addSample(double x) {
+        _n++;
+        double delta = x - _mean;
+        _mean += delta / _n;
+        double delta2 = x - _mean;
+        _M2 += delta * delta2;
+    }
+    double variance() const {
+        // return _M2 / (_n - 1);
+        return _M2 / _n;
+    }
+    double avarage() const {
+        return _mean;
+    }
+private:
+    Kahan _M2 = 0.0;
+    Kahan _mean = 0.0;
+    int _n = 0;
+};
+
+class OnlineArrayVariance {
+public:
+    OnlineArrayVariance(size_t s) :_size(s) {
+      _M2 = std::vector<Kahan>(_size);
+      _mean = std::vector<Kahan>(_size);
+    };
+    void addArray(kvs::ValueArray<float> array) {
+      int i = 0;
+      _n++;
+      for (auto&& a: array) {
+        addSample(a, i++);
+      }
+    }
+    void addSample(double x, int i) {
+        double delta = x - _mean[i];
+        _mean[i] += delta / _n;
+        double delta2 = x - _mean[i];
+        _M2[i] += delta * delta2;
+    }
+    kvs::ValueArray<float> variance() const {
+        // return _M2 / (_n - 1);
+      kvs::ValueArray<float> v(_size);
+        for (size_t i = 0; i < _size; ++i) {
+          v[i] = _M2[i] / _n;
+        }
+        return v;
+    }
+    kvs::ValueArray<float> avarage() const {
+      kvs::ValueArray<float> v(_size);
+      for (size_t i = 0; i < _size; ++i) {
+        v[i] = _mean[i];
+      }
+      return v;
+    }
+private:
+    std::vector<Kahan> _M2;
+    std::vector<Kahan> _mean;
+    size_t _size;
+    int _n = 0;
+};
+
+//int main() {
+//  OnlineArrayVariance a(5);
+//  std::vector<double> v1 = {1, 2, 3, 4, 5};
+//  std::vector<double> v2 = {2, 2, 3, 4, 5};
+//  std::vector<double> v3 = {3, 2, 3, 4, 5};
+//  std::vector<double> v4 = {4, 2, 3, 4, 5};
+//  a.addArray(v1);
+//  a.addArray(v2);
+//  a.addArray(v3);
+//  a.addArray(v4);
+//  auto average = a.avarage();
+//  auto variance = a.variance();
+//  for (int i = 0; i < 5; ++i) {
+//    std::cout << i << ": average: " << average[i] << " " << "variance: " << variance[i] << std::endl;
+//  }
+//
+//}
 
 int main( int argc, char** argv )
 {
@@ -152,9 +265,32 @@ int main( int argc, char** argv )
 
     kvs::StructuredVolumeObject* volume = loadData("ensemble_data/gs0030.bin", Parameter::QV);
 
-    kvs::StructuredVolumeObject* volume2 = loadData("ensemble_data/gs0030.bin", Parameter::QV);
+    kvs::StructuredVolumeObject* volume2 = loadData("ensemble_data/gs0030.bin", Parameter::V);
     std::cout << kvs::Stat::Corr(volume->values().asValueArray<float>(), volume2->values().asValueArray<float>()) << std::endl;
 
+    OnlineArrayVariance oav(SIZE);
+   // for (int i = 0; i < 20; ++i) {
+   //   std::string renban_name = make_renban(i);
+   //   kvs::StructuredVolumeObject* vol = loadData(renban_name, Parameter::V);
+   //   oav.addArray(vol->values().asValueArray<float>());
+   //   delete vol;
+   // }
+
+    oav.addArray(volume->values().asValueArray<float>());
+    oav.addArray(volume2->values().asValueArray<float>());
+    kvs::StructuredVolumeObject *average_vol = new kvs::StructuredVolumeObject();
+    average_vol->setGridTypeToUniform();
+    average_vol->setVeclen(1);
+    average_vol->setResolution(kvs::Vector3ui(NX, NY, NZ));
+    average_vol->setValues(oav.avarage());
+    average_vol->updateMinMaxValues();
+
+    kvs::StructuredVolumeObject *variance_vol = new kvs::StructuredVolumeObject();
+    variance_vol->setGridTypeToUniform();
+    variance_vol->setVeclen(1);
+    variance_vol->setResolution(kvs::Vector3ui(NX, NY, NZ));
+    variance_vol->setValues(oav.variance());
+    variance_vol->updateMinMaxValues();
 
     if ( !volume )
     {
@@ -167,7 +303,7 @@ int main( int argc, char** argv )
 
     const kvs::OrthoSlice::AlignedAxis a = kvs::OrthoSlice::ZAxis;
     const kvs::TransferFunction t( 256 );
-    kvs::PolygonObject* object = new kvs::OrthoSlice( volume, p, a, t );
+    kvs::PolygonObject* object = new kvs::OrthoSlice( variance_vol, p, a, t );
     if ( !object )
     {
         kvsMessageError( "Cannot create a polygon object." );
@@ -179,8 +315,8 @@ int main( int argc, char** argv )
     ren->enableShading();
 
     kvs::glut::Screen screen( &app );
-    screen.registerObject( object );
-    //screen.registerObject( volume, ren );
+    //screen.registerObject( object );
+    screen.registerObject( variance_vol, ren );
     screen.setGeometry( 0, 0, 512, 512 );
     screen.setTitle( "kvs::OrthoSlice" );
 
@@ -195,7 +331,7 @@ int main( int argc, char** argv )
     //screen.addEvent(&capture_event);
     //screen.show();
 
-    //return( app.run() );
-    app.quit();
+    return( app.run() );
+    //app.quit();
     delete volume;
 }
